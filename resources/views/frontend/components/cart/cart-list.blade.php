@@ -74,6 +74,7 @@ document.addEventListener("DOMContentLoaded", async function () {
 function renderCartItems(cartItems) {
     const container = document.getElementById('cart-items-container');
     let html = '';
+    let hasStockError = false;
 
     if (cartItems.length === 0) {
         html = `<div class="alert alert-info">Your cart is empty</div>`;
@@ -95,6 +96,8 @@ function renderCartItems(cartItems) {
             : product.client.firstName;
 
         const stock = variant ? variant.current_stock : product.current_stock;
+        const quantityError = item.quantity > stock;
+        if (quantityError) hasStockError = true;
 
         html += `
         <li class="list-group-item p-4">
@@ -126,11 +129,15 @@ function renderCartItems(cartItems) {
                                 <span>${stock}</span>
                             </div>
                             <input type="number" 
-                                   class="form-control form-control-sm w-px-100 mt-4 cart-quantity-input" 
+                                   class="form-control form-control-sm w-px-100 mt-4 cart-quantity-input ${quantityError ? 'is-invalid' : ''}" 
                                    value="${item.quantity}"
                                    min="1"
                                    data-cart-id="${item.id}"
-                                   onchange="updateCartItem(${item.id}, this.value)">
+                                   data-max-stock="${stock}"
+                                   onchange="handleQuantityChange(${item.id}, this.value)">
+                            <div class="invalid-feedback" id="quantity-error-${item.id}">
+                                ${quantityError ? `Cannot order more than ${stock} items` : ''}
+                            </div>
                         </div>
                         <div class="col-md-4">
                             <div class="text-md-end">
@@ -159,6 +166,56 @@ function renderCartItems(cartItems) {
 
     html += `</ul>`;
     container.innerHTML = html;
+    
+    // Update order button state
+    const orderButton = document.querySelector('.btn-next');
+    orderButton.disabled = hasStockError;
+}
+
+async function handleQuantityChange(cartId, newQuantity) {
+    const input = document.querySelector(`input[data-cart-id="${cartId}"]`);
+    const errorElement = document.getElementById(`quantity-error-${cartId}`);
+    const maxStock = parseInt(input.dataset.maxStock);
+    const quantity = parseInt(newQuantity);
+
+    // Clear previous errors
+    input.classList.remove('is-invalid');
+    errorElement.textContent = '';
+
+    if (quantity > maxStock) {
+        input.classList.add('is-invalid');
+        errorElement.textContent = `Cannot order more than ${maxStock} items`;
+        document.querySelector('.btn-next').disabled = true;
+        return;
+    }
+
+    if (quantity < 1) {
+        input.classList.add('is-invalid');
+        errorElement.textContent = 'Quantity must be at least 1';
+        document.querySelector('.btn-next').disabled = true;
+        return;
+    }
+
+    // Proceed with valid update
+    try {
+        showLoader();
+        const response = await axios.post('/user/cart/update', {
+            cart_id: cartId,
+            quantity: quantity
+        });
+
+        if (response.status === 200) {
+            const cartResponse = await axios.get('/user/get-cart-product');
+            renderCartItems(cartResponse.data.data.cart_items);
+            updateCartSummary(cartResponse.data.data.summary);
+            updateCartCount();
+        }
+    } catch (error) {
+        errorToast('Failed to update cart item');
+        console.error('Update error:', error);
+    } finally {
+        hideLoader();
+    }
 }
 
 function updateCartSummary(summary) {
